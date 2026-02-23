@@ -27,7 +27,8 @@ GPT_4_VISION_MODELS = ("gpt-4o",)
 GPT_4_128K_MODELS = ("gpt-4-1106-preview", "gpt-4-0125-preview", "gpt-4-turbo-preview", "gpt-4-turbo", "gpt-4-turbo-2024-04-09")
 GPT_4O_MODELS = ("gpt-4o", "gpt-4o-mini", "chatgpt-4o-latest")
 O_MODELS = ("o1", "o1-mini", "o1-preview")
-GPT_ALL_MODELS = GPT_3_MODELS + GPT_3_16K_MODELS + GPT_4_MODELS + GPT_4_32K_MODELS + GPT_4_VISION_MODELS + GPT_4_128K_MODELS + GPT_4O_MODELS + O_MODELS
+GPT_5_MODELS = ("gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-5.1", "gpt-5.2", "gpt-5.2-chat-latest")
+GPT_ALL_MODELS = GPT_3_MODELS + GPT_3_16K_MODELS + GPT_4_MODELS + GPT_4_32K_MODELS + GPT_4_VISION_MODELS + GPT_4_128K_MODELS + GPT_4O_MODELS + O_MODELS + GPT_5_MODELS
 
 def default_max_tokens(model: str) -> int:
     """
@@ -54,6 +55,10 @@ def default_max_tokens(model: str) -> int:
         return 4096
     elif model in O_MODELS:
         return 4096
+    elif model in GPT_5_MODELS:
+        return 4096
+    else:
+        return 4096  # sensible default for unknown models
 
 
 def are_functions_available(model: str) -> bool:
@@ -241,7 +246,7 @@ class OpenAIHelper:
                     logging.warning(f'Error while summarising chat history: {str(e)}. Popping elements instead...')
                     self.conversations[chat_id] = self.conversations[chat_id][-self.config['max_history_size']:]
 
-            max_tokens_str = 'max_completion_tokens' if self.config['model'] in O_MODELS else 'max_tokens'
+            max_tokens_str = 'max_completion_tokens' if self.config['model'] in O_MODELS + GPT_5_MODELS else 'max_tokens'
             common_args = {
                 'model': self.config['model'] if not self.conversations_vision[chat_id] else self.config['vision_model'],
                 'messages': self.conversations[chat_id],
@@ -568,7 +573,7 @@ class OpenAIHelper:
         """
         if content == '':
             content = self.config['assistant_prompt']
-        self.conversations[chat_id] = [{"role": "assistant" if self.config['model'] in O_MODELS else "system", "content": content}]
+        self.conversations[chat_id] = [{"role": "developer" if self.config['model'] in O_MODELS + GPT_5_MODELS else "system", "content": content}]
         self.conversations_vision[chat_id] = False
 
     def __max_age_reached(self, chat_id) -> bool:
@@ -612,7 +617,7 @@ class OpenAIHelper:
         response = await self.client.chat.completions.create(
             model=self.config['model'],
             messages=messages,
-            temperature=1 if self.config['model'] in O_MODELS else 0.4
+            temperature=1 if self.config['model'] in O_MODELS + GPT_5_MODELS else 0.4
         )
         return response.choices[0].message.content
 
@@ -640,9 +645,10 @@ class OpenAIHelper:
                 return 32_768
             else:
                 return 65_536
-        raise NotImplementedError(
-            f"Max tokens for model {self.config['model']} is not implemented yet."
-        )
+        elif self.config['model'] in GPT_5_MODELS:
+            return 128_000
+        # Unknown model — assume large context
+        return 128_000
 
     # https://github.com/openai/openai-cookbook/blob/main/examples/How_to_count_tokens_with_tiktoken.ipynb
     def __count_tokens(self, messages) -> int:
@@ -657,11 +663,8 @@ class OpenAIHelper:
         except KeyError:
             encoding = tiktoken.get_encoding("o200k_base")
 
-        if model in GPT_ALL_MODELS:
-            tokens_per_message = 3
-            tokens_per_name = 1
-        else:
-            raise NotImplementedError(f"""num_tokens_from_messages() is not implemented for model {model}.""")
+        tokens_per_message = 3
+        tokens_per_name = 1
         num_tokens = 0
         for message in messages:
             num_tokens += tokens_per_message
@@ -694,9 +697,6 @@ class OpenAIHelper:
         image_file = io.BytesIO(image_bytes)
         image = Image.open(image_file)
         model = self.config['vision_model']
-        if model not in GPT_4_VISION_MODELS:
-            raise NotImplementedError(f"""count_tokens_vision() is not implemented for model {model}.""")
-        
         w, h = image.size
         if w > h: w, h = h, w
         # this computation follows https://platform.openai.com/docs/guides/vision and https://openai.com/pricing#gpt-4-turbo
