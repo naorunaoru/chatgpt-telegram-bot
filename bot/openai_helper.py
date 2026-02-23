@@ -29,6 +29,8 @@ GPT_4O_MODELS = ("gpt-4o", "gpt-4o-mini", "chatgpt-4o-latest")
 O_MODELS = ("o1", "o1-mini", "o1-preview")
 GPT_5_MODELS = ("gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-5.1", "gpt-5.2", "gpt-5.2-chat-latest")
 GPT_ALL_MODELS = GPT_3_MODELS + GPT_3_16K_MODELS + GPT_4_MODELS + GPT_4_32K_MODELS + GPT_4_VISION_MODELS + GPT_4_128K_MODELS + GPT_4O_MODELS + O_MODELS + GPT_5_MODELS
+GPT_IMAGE_MODELS = ("gpt-image-1", "gpt-image-1-mini", "gpt-image-1.5", "chatgpt-image-latest")
+DALLE_MODELS = ("dall-e-2", "dall-e-3")
 
 def default_max_tokens(model: str) -> int:
     """
@@ -329,20 +331,36 @@ class OpenAIHelper:
 
     async def generate_image(self, prompt: str) -> tuple[str, str]:
         """
-        Generates an image from the given prompt using DALL·E model.
+        Generates an image from the given prompt using DALL·E or GPT Image model.
         :param prompt: The prompt to send to the model
-        :return: The image URL and the image size
+        :return: The image URL (or base64 data URI) and the image size
         """
         bot_language = self.config['bot_language']
         try:
-            response = await self.client.images.generate(
-                prompt=prompt,
-                n=1,
-                model=self.config['image_model'],
-                quality=self.config['image_quality'],
-                style=self.config['image_style'],
-                size=self.config['image_size']
-            )
+            image_model = self.config['image_model']
+
+            if image_model in GPT_IMAGE_MODELS:
+                # GPT Image models: no style param, quality is low/medium/high/auto
+                gpt_image_quality = self.config.get('gpt_image_quality', 'auto')
+                args = {
+                    'prompt': prompt,
+                    'n': 1,
+                    'model': image_model,
+                    'quality': gpt_image_quality,
+                    'size': self.config['image_size'],
+                }
+            else:
+                # DALL-E models
+                args = {
+                    'prompt': prompt,
+                    'n': 1,
+                    'model': image_model,
+                    'quality': self.config['image_quality'],
+                    'style': self.config['image_style'],
+                    'size': self.config['image_size'],
+                }
+
+            response = await self.client.images.generate(**args)
 
             if len(response.data) == 0:
                 logging.error(f'No response from GPT: {str(response)}')
@@ -351,7 +369,16 @@ class OpenAIHelper:
                     f"⚠️\n{localized_text('try_again', bot_language)}."
                 )
 
-            return response.data[0].url, self.config['image_size']
+            # GPT Image models return b64_json by default, DALL-E returns URL
+            image_data = response.data[0]
+            if image_data.url:
+                return image_data.url, self.config['image_size']
+            elif image_data.b64_json:
+                import base64
+                image_bytes = base64.b64decode(image_data.b64_json)
+                return io.BytesIO(image_bytes), self.config['image_size']
+            else:
+                raise Exception("No image data in response")
         except Exception as e:
             raise Exception(f"⚠️ _{localized_text('error', bot_language)}._ ⚠️\n{str(e)}") from e
 
